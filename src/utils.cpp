@@ -35,15 +35,15 @@ void drop_callback(GLFWwindow* window, int count, const char** paths) {
 		return;
 	}
 	for (int i = 0; i < count; i++) {
-		const std::string dropped = std::string(paths[0]);
-		std::filesystem::path p(dropped);
+		const std::string dropped = paths[i];
+		std::filesystem::path p =  std::filesystem::u8path(dropped);
 		std::string extLower = to_lower(p.extension().string());
 		if (extLower.empty() || !is_opencv_supported_ext(extLower)) {
 			showError(("Not a valid image file: " + string(paths[i])).c_str());
-			return;
+			continue;
 		}
 		ImageState state;
-		state.pathToLoad = std::string(paths[i]);
+		state.pathToLoad = p.string();
 		std::cout << *state.pathToLoad << endl;
 		states->push_back(state);
 	}

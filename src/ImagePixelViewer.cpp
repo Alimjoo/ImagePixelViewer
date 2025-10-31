@@ -70,6 +70,9 @@ int ImagePixelViewer() {
 
 
 
+
+
+
 		ImGui::Render();
 		int display_w, display_h;
 		glfwGetFramebufferSize(window, &display_w, &display_h);
