@@ -1,9 +1,11 @@
-#include "main.h"
+#include "ImagePixelViewer.h"
 
 
-int main(){
+int main() {
+	ImagePixelViewer();
 
-    return 0;
+
+	return 0;
 }
 
 
