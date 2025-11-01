@@ -56,6 +56,7 @@ static const std::unordered_set<std::string> kExt{
 	// OpenEXR (if built with OpenEXR)
 	".exr"
 };
+#define _S(_LITERAL)    (const char*)u8##_LITERAL
 #pragma endregion
 
 #pragma region USINGS
@@ -64,6 +65,7 @@ using std::endl;
 using std::vector;
 using std::string;
 using cv::Mat;
+namespace fs = std::filesystem;
 #pragma endregion
 
 
@@ -85,20 +87,25 @@ struct ImageState {
 	cv::Mat sourceOriginal;
 	cv::Mat preview8u;
 	cv::Mat previewRGBA;
-	std::string statusLine = "Drag & Drop";
 	std::string currentPath;
+	std::string filename;
+	int width;
+	int height;
+	int channels;
 	double minVal = 0.0;
 	double maxVal = 0.0;
 	bool hasMinMax = false;
 	float zoom = 1.0f;
-	bool fitToWindow = true;
-	bool autoNormalize = true;
-	std::optional<std::string> pathToLoad;
-	// NEW: manual pan offset (used when !fitToWindow)
 	ImVec2 pan = ImVec2(0.0f, 0.0f);
 };
 
-using ImageStates = vector<ImageState>;
+struct ImageStates {
+	bool Auto_Contrast = false;
+	bool One_Channel_Pseudo_Color = false;
+	bool Four_Channel_Ignore_Alpha = false;
+	vector<ImageState> states;
+	int selected = 0;
+};
 #pragma endregion
 
 
@@ -110,7 +117,7 @@ using ImageStates = vector<ImageState>;
 void glfw_error_callback(int error, const char* description);
 void drop_callback(GLFWwindow* window, int count, const char** paths);
 void release_texture(ImageTexture& texture);
-bool load_image_from_path(ImageState& state, const std::string& path, std::string& errorOut);
+bool load_image_from_path(ImageState& state, std::string& errorOut);
 #pragma endregion
 
 

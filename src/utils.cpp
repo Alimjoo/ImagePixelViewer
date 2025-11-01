@@ -36,16 +36,22 @@ void drop_callback(GLFWwindow* window, int count, const char** paths) {
 	}
 	for (int i = 0; i < count; i++) {
 		const std::string dropped = paths[i];
-		std::filesystem::path p =  std::filesystem::u8path(dropped);
+		std::filesystem::path p = std::filesystem::u8path(dropped);
 		std::string extLower = to_lower(p.extension().string());
 		if (extLower.empty() || !is_opencv_supported_ext(extLower)) {
 			showError(("Not a valid image file: " + string(paths[i])).c_str());
 			continue;
 		}
 		ImageState state;
-		state.pathToLoad = p.string();
-		std::cout << *state.pathToLoad << endl;
-		states->push_back(state);
+		state.currentPath = p.string();
+		state.filename = p.filename().u8string();
+		std::cout << state.currentPath << endl;
+		string load_error;
+		if (!load_image_from_path(state, load_error)) {
+			showError(load_error.c_str());
+			continue;
+		}
+		states->states.push_back(state);
 	}
 }
 
@@ -153,21 +159,7 @@ std::optional<std::string> update_preview_from_source(ImageState& state, std::st
 	}
 	else {
 		cv::Mat converted;
-		if (state.autoNormalize) {
-			double minVal = 0.0;
-			double maxVal = 0.0;
-			cv::minMaxIdx(state.sourceOriginal, &minVal, &maxVal);
-			state.minVal = minVal;
-			state.maxVal = maxVal;
-			state.hasMinMax = true;
-
-			double scale = (maxVal - minVal) != 0.0 ? 255.0 / (maxVal - minVal) : 1.0;
-			double shift = -minVal * scale;
-			state.sourceOriginal.convertTo(converted, CV_8U, scale, shift);
-		}
-		else {
-			state.sourceOriginal.convertTo(converted, CV_8U);
-		}
+		state.sourceOriginal.convertTo(converted, CV_8U);
 		eightBit = converted;
 	}
 
@@ -200,23 +192,12 @@ std::optional<std::string> update_preview_from_source(ImageState& state, std::st
 	std::ostringstream oss;
 	oss << "original " << describe_mat(state.sourceOriginal)
 		<< ", preview " << describe_mat(state.preview8u);
-	if (state.sourceOriginal.depth() != CV_8U) {
-		if (state.autoNormalize) {
-			oss << " (normalized";
-			if (state.hasMinMax) {
-				oss << ", min=" << state.minVal << ", max=" << state.maxVal;
-			}
-			oss << ")";
-		}
-		else {
-			oss << " (converted to 8-bit)";
-		}
-	}
 
 	return oss.str();
 }
 
-bool load_image_from_path(ImageState& state, const std::string& path, std::string& errorOut) {
+bool load_image_from_path(ImageState& state, std::string& errorOut) {
+	string path = state.currentPath;
 	std::error_code fsError;
 	if (!std::filesystem::exists(path, fsError) || !std::filesystem::is_regular_file(path, fsError)) {
 		errorOut = "File not found: " + path;
@@ -226,12 +207,14 @@ bool load_image_from_path(ImageState& state, const std::string& path, std::strin
 	cv::Mat loaded = cv::imread(path, cv::IMREAD_UNCHANGED);
 	if (loaded.empty()) {
 		errorOut = "Failed to load image via OpenCV.";
-		showError(("Cannot load image file: " + *state.pathToLoad).c_str());
+		showError(("Cannot load image file: " + state.currentPath).c_str());
 		return false;
 	}
 
 	state.sourceOriginal = loaded;
-	state.currentPath = path;
+	state.width = loaded.cols;
+	state.height = loaded.cols;
+	state.channels = loaded.channels();
 	copy_path_to_buffer(state, path);
 
 	auto status = update_preview_from_source(state, errorOut);
@@ -240,17 +223,12 @@ bool load_image_from_path(ImageState& state, const std::string& path, std::strin
 	}
 
 	state.zoom = 1.0f;
-	state.fitToWindow = true;
-
 	std::filesystem::path fsPath(path);
 	std::ostringstream oss;
 	std::string displayName = fsPath.filename().string();
 	if (displayName.empty()) {
 		displayName = fsPath.string();
 	}
-	oss << "Loaded \"" << displayName << "\" | " << *status;
-	state.statusLine = oss.str();
-
 	return true;
 }
 
