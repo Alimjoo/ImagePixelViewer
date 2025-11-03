@@ -48,7 +48,9 @@ int ImagePixelViewer() {
 		ImFont* font_arabic = io.Fonts->AddFontFromFileTTF(fontPath_Debug.c_str(), 16.0f);
 	}
 
-	ImGui::StyleColorsDark();
+	//ImGui::StyleColorsClassic();
+	ImGui::StyleColorsLight();
+	//ImGui::StyleColorsDark();
 	ImGuiStyle& style = ImGui::GetStyle();
 	style.ScaleAllSizes(mainScale);
 	style.FontScaleDpi = mainScale;
@@ -171,15 +173,15 @@ int ImagePixelViewer() {
 				}
 				if (pushed > 0) ImGui::PopStyleColor(pushed);
 				ImGui::SameLine();
+				ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 1.0f, 1.0f, 1.00f));
 				ImGui::BeginGroup();
 				ImGui::TextWrapped("%s", img.filename.c_str());
 				ImGui::Text("%d x %d", img.width, img.height);
 				ImGui::Text("%d x %s", img.channels, img.depth.c_str());
+				ImGui::PopStyleColor();
 
 				ImGui::EndGroup();
-
 				ImGui::PopID();
-
 				ImGui::Spacing();
 			}
 			if (states.states.empty()) {
@@ -229,7 +231,13 @@ int ImagePixelViewer() {
 						ImGuiPopupFlags_MouseButtonRight /* open on RMB */
 					/*| ImGuiPopupFlags_NoOpenOverItems*/)) // uncomment to block opening over items
 					{
-						if (ImGui::MenuItem("Reset Zoom&Pan")) { state.pan = ImVec2(0, 0); state.zoom = state.minZoom; state.fitToWindow = true; }
+						if (ImGui::MenuItem("Reset Zoom&Pan")) {
+							for (auto& one_state : states.states) {
+								one_state.pan = ImVec2(0, 0);
+								one_state.zoom = one_state.minZoom;
+								one_state.fitToWindow = true;
+							}
+						}
 						if (ImGui::MenuItem("Link View", nullptr, &states.Link_View));
 						ImGui::Separator();
 						if (ImGui::MenuItem("Gray Image", nullptr, &states.Gray_Image));
