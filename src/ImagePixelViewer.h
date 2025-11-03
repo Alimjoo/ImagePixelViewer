@@ -33,7 +33,9 @@
 
 #pragma region Consts
 const float PREVIEW_WIDTH = 300.0f;
-const float maxZoom = 64.0f;
+const float maxZoom = 72.0f;
+const float thumbWidth = 96.0f;
+const float thumbHeight = 54.0f;
 static const std::unordered_set<std::string> kExt{
 	// bitmap
 	".bmp", ".dib",
@@ -84,23 +86,29 @@ struct ImageTexture {
 struct ImageState {
 	std::array<char, 512> inputBuffer{};
 	ImageTexture texture{};
+	ImageTexture texture_thumb{};
 	cv::Mat sourceOriginal;
 	cv::Mat preview8u;
 	cv::Mat previewRGBA;
 	std::string currentPath;
 	std::string filename;
+	std::string depth;
+	bool fitToWindow = true;
 	int width;
 	int height;
 	int channels;
 	double minVal = 0.0;
 	double maxVal = 0.0;
 	bool hasMinMax = false;
+	float minZoom = -1;
 	float zoom = 1.0f;
 	ImVec2 pan = ImVec2(0.0f, 0.0f);
 };
 
 struct ImageStates {
-	bool Auto_Contrast = false;
+	bool Link_View = false;
+	bool Gray_Image = false;
+	bool Auto_Maximize_Contrast = false;
 	bool One_Channel_Pseudo_Color = false;
 	bool Four_Channel_Ignore_Alpha = false;
 	vector<ImageState> states;
@@ -118,6 +126,8 @@ void glfw_error_callback(int error, const char* description);
 void drop_callback(GLFWwindow* window, int count, const char** paths);
 void release_texture(ImageTexture& texture);
 bool load_image_from_path(ImageState& state, std::string& errorOut);
+std::string format_pixel_value(const cv::Mat& mat, int x, int y);
+void DeleteSelected(ImageStates& states);
 #pragma endregion
 
 
