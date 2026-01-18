@@ -25,6 +25,15 @@ std::string to_lower(std::string s) {
 	return s;
 }
 
+static std::string normalize_path(const fs::path& path) {
+	std::error_code ec;
+	fs::path absolutePath = fs::absolute(path, ec);
+	if (ec) {
+		absolutePath = path;
+	}
+	return absolutePath.lexically_normal().string();
+}
+
 void drop_callback(GLFWwindow* window, int count, const char** paths) {
 	if (count <= 0 || paths == nullptr) {
 		return;
@@ -36,18 +45,33 @@ void drop_callback(GLFWwindow* window, int count, const char** paths) {
 	}
 	for (int i = 0; i < count; i++) {
 		const std::string dropped = paths[i];
-		std::filesystem::path p = std::filesystem::u8path(dropped);
+		fs::path p = fs::u8path(dropped);
 		std::string extLower = to_lower(p.extension().string());
 		if (extLower.empty() || !is_opencv_supported_ext(extLower)) {
 			showError(("Not a valid image file: " + string(paths[i])).c_str());
 			continue;
 		}
+		const std::string normalizedPath = normalize_path(p);
+		bool alreadyLoaded = false;
+		for (const auto& existing : states->states) {
+			if (normalize_path(fs::path(existing.currentPath)) == normalizedPath) {
+				alreadyLoaded = true;
+				break;
+			}
+		}
+		if (alreadyLoaded) {
+			continue;
+		}
 		ImageState state;
+		state.grayApplied = states->Gray_Image;
+		state.autoContrastApplied = states->Auto_Maximize_Contrast;
+		state.pseudoColorApplied = states->One_Channel_Pseudo_Color;
+		state.ignoreAlphaApplied = states->Four_Channel_Ignore_Alpha;
 		state.currentPath = p.string();
 		state.filename = p.filename().u8string();
 		std::cout << state.currentPath << endl;
 		string load_error;
-		if (!load_image_from_path(state, load_error)) {
+		if (!load_image_from_path(state, load_error, true)) {
 			showError(load_error.c_str());
 			continue;
 		}
@@ -129,8 +153,23 @@ bool create_texture_from_rgba(ImageTexture& texture, const cv::Mat& rgbaImage, s
 		error = "Cannot create texture: image is empty.";
 		return false;
 	}
-	if (rgbaImage.type() != CV_8UC4) {
-		error = "Texture upload expects CV_8UC4 data.";
+	GLint internalFormat = 0;
+	GLenum dataType = 0;
+	switch (rgbaImage.type()) {
+	case CV_8UC4:
+		internalFormat = GL_RGBA8;
+		dataType = GL_UNSIGNED_BYTE;
+		break;
+	case CV_16UC4:
+		internalFormat = GL_RGBA16;
+		dataType = GL_UNSIGNED_SHORT;
+		break;
+	case CV_32FC4:
+		internalFormat = GL_RGBA32F;
+		dataType = GL_FLOAT;
+		break;
+	default:
+		error = "Texture upload expects CV_8UC4, CV_16UC4, or CV_32FC4 data.";
 		return false;
 	}
 
@@ -162,10 +201,10 @@ bool create_texture_from_rgba(ImageTexture& texture, const cv::Mat& rgbaImage, s
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);      // safe edges
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
-	// Upload (RGBA8)
+	// Upload (RGBA)
 	glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, texture.width, texture.height, 0,
-		GL_RGBA, GL_UNSIGNED_BYTE, src->data);
+	glTexImage2D(GL_TEXTURE_2D, 0, internalFormat, texture.width, texture.height, 0,
+		GL_RGBA, dataType, src->data);
 
 	glBindTexture(GL_TEXTURE_2D, 0);
 
@@ -244,34 +283,156 @@ std::optional<std::string> update_preview_from_source(ImageState& state, std::st
 		return std::nullopt;
 	}
 
-	cv::Mat eightBit;
+	cv::Mat previewMat;
 	state.hasMinMax = false;
+	state.minVal = 0.0;
+	state.maxVal = 0.0;
 
-	if (state.sourceOriginal.depth() == CV_8U) {
-		eightBit = state.sourceOriginal;
+	if (!state.autoContrastApplied) {
+		switch (state.sourceOriginal.depth()) {
+		case CV_8U:
+			previewMat = state.sourceOriginal;
+			break;
+		case CV_8S: {
+			cv::Mat converted;
+			state.sourceOriginal.convertTo(converted, CV_8U);
+			previewMat = converted;
+			break;
+		}
+		case CV_16U:
+			previewMat = state.sourceOriginal;
+			break;
+		case CV_16S: {
+			cv::Mat converted;
+			state.sourceOriginal.convertTo(converted, CV_16U);
+			previewMat = converted;
+			break;
+		}
+		case CV_32S:
+		case CV_32F:
+		case CV_64F: {
+			cv::Mat converted;
+			state.sourceOriginal.convertTo(converted, CV_32F);
+			previewMat = converted;
+			break;
+		}
+		default:
+			errorOut = "Unsupported image depth.";
+			return std::nullopt;
+		}
 	}
 	else {
-		cv::Mat converted;
-		state.sourceOriginal.convertTo(converted, CV_8U);
-		eightBit = converted;
+		std::vector<cv::Mat> channels;
+		cv::split(state.sourceOriginal, channels);
+		if (channels.empty()) {
+			errorOut = "Failed to split image channels.";
+			return std::nullopt;
+		}
+
+		double minAcross = std::numeric_limits<double>::infinity();
+		double maxAcross = -std::numeric_limits<double>::infinity();
+
+		for (size_t i = 0; i < channels.size(); ++i) {
+			if (channels.size() == 4 && i == 3) {
+				cv::Mat alpha8;
+				channels[i].convertTo(alpha8, CV_8U);
+				channels[i] = alpha8;
+				continue;
+			}
+
+			cv::Mat floatChan;
+			channels[i].convertTo(floatChan, CV_32F);
+			double minVal = 0.0;
+			double maxVal = 0.0;
+			cv::minMaxLoc(floatChan, &minVal, &maxVal);
+			minAcross = std::min(minAcross, minVal);
+			maxAcross = std::max(maxAcross, maxVal);
+
+			cv::Mat normalized8;
+			if (minVal == maxVal) {
+				normalized8 = cv::Mat::zeros(floatChan.size(), CV_8U);
+			}
+			else {
+				floatChan.convertTo(normalized8, CV_8U, 255.0 / (maxVal - minVal), -minVal * 255.0 / (maxVal - minVal));
+			}
+			channels[i] = normalized8;
+		}
+
+		state.minVal = std::isfinite(minAcross) ? minAcross : 0.0;
+		state.maxVal = std::isfinite(maxAcross) ? maxAcross : 0.0;
+		state.hasMinMax = true;
+
+		cv::merge(channels, previewMat);
 	}
 
-	state.preview8u = eightBit;
+	if (state.grayApplied && previewMat.channels() > 1) {
+		cv::Mat gray;
+		if (previewMat.channels() == 3) {
+			cv::cvtColor(previewMat, gray, cv::COLOR_BGR2GRAY);
+		}
+		else if (previewMat.channels() == 4) {
+			cv::cvtColor(previewMat, gray, cv::COLOR_BGRA2GRAY);
+		}
+		previewMat = gray;
+	}
+
+	bool previewIsRGBA = false;
+	if (state.pseudoColorApplied && previewMat.channels() == 1) {
+		cv::Mat gray8;
+		if (previewMat.depth() == CV_8U) {
+			gray8 = previewMat;
+		}
+		else {
+			previewMat.convertTo(gray8, CV_8U);
+		}
+		cv::Mat colorBgr;
+		cv::applyColorMap(gray8, colorBgr, cv::COLORMAP_TURBO);
+		cv::cvtColor(colorBgr, previewMat, cv::COLOR_BGR2RGBA);
+		previewIsRGBA = true;
+	}
+
+	if (state.ignoreAlphaApplied && previewMat.channels() == 4) {
+		std::vector<cv::Mat> channels;
+		cv::split(previewMat, channels);
+		if (channels.size() == 4) {
+			switch (previewMat.depth()) {
+			case CV_8U:
+				channels[3].setTo(255);
+				break;
+			case CV_16U:
+				channels[3].setTo(65535);
+				break;
+			case CV_32F:
+				channels[3].setTo(1.0f);
+				break;
+			default:
+				break;
+			}
+			cv::merge(channels, previewMat);
+		}
+	}
+
+	state.preview8u = previewMat;
 
 	cv::Mat rgba;
-	switch (eightBit.channels()) {
-	case 1:
-		cv::cvtColor(eightBit, rgba, cv::COLOR_GRAY2RGBA);
-		break;
-	case 3:
-		cv::cvtColor(eightBit, rgba, cv::COLOR_BGR2RGBA);
-		break;
-	case 4:
-		cv::cvtColor(eightBit, rgba, cv::COLOR_BGRA2RGBA);
-		break;
-	default:
-		errorOut = "Unsupported channel count: " + std::to_string(eightBit.channels());
-		return std::nullopt;
+	if (previewIsRGBA) {
+		rgba = previewMat;
+	}
+	else {
+		switch (previewMat.channels()) {
+		case 1:
+			cv::cvtColor(previewMat, rgba, cv::COLOR_GRAY2RGBA);
+			break;
+		case 3:
+			cv::cvtColor(previewMat, rgba, cv::COLOR_BGR2RGBA);
+			break;
+		case 4:
+			cv::cvtColor(previewMat, rgba, cv::COLOR_BGRA2RGBA);
+			break;
+		default:
+			errorOut = "Unsupported channel count: " + std::to_string(previewMat.channels());
+			return std::nullopt;
+		}
 	}
 
 	state.previewRGBA = rgba;
@@ -282,7 +443,13 @@ std::optional<std::string> update_preview_from_source(ImageState& state, std::st
 		return std::nullopt;
 	}
 
-	Mat thumb_img = makeThumbnailLetterboxed(rgba);
+	cv::Mat thumbSource = rgba;
+	if (thumbSource.type() != CV_8UC4) {
+		cv::Mat thumb8;
+		thumbSource.convertTo(thumb8, CV_8U);
+		thumbSource = thumb8;
+	}
+	Mat thumb_img = makeThumbnailLetterboxed(thumbSource);
 	create_texture_from_rgba(state.texture_thumb, thumb_img, textureError);
 	std::ostringstream oss;
 	oss << "original " << describe_mat(state.sourceOriginal)
@@ -291,7 +458,29 @@ std::optional<std::string> update_preview_from_source(ImageState& state, std::st
 	return oss.str();
 }
 
-bool load_image_from_path(ImageState& state, std::string& errorOut) {
+static bool read_file_stamp(const std::string& path,
+	fs::file_time_type& outWriteTime,
+	std::uintmax_t& outFileSize,
+	std::string& errorOut) {
+	std::error_code fsError;
+	if (!std::filesystem::exists(path, fsError) || !std::filesystem::is_regular_file(path, fsError)) {
+		errorOut = "File not found: " + path;
+		return false;
+	}
+	outWriteTime = std::filesystem::last_write_time(path, fsError);
+	if (fsError) {
+		errorOut = "Failed to read file timestamp: " + path;
+		return false;
+	}
+	outFileSize = std::filesystem::file_size(path, fsError);
+	if (fsError) {
+		errorOut = "Failed to read file size: " + path;
+		return false;
+	}
+	return true;
+}
+
+bool load_image_from_path(ImageState& state, std::string& errorOut, bool showErrors) {
 	string path = state.currentPath;
 	std::error_code fsError;
 	if (!std::filesystem::exists(path, fsError) || !std::filesystem::is_regular_file(path, fsError)) {
@@ -302,7 +491,9 @@ bool load_image_from_path(ImageState& state, std::string& errorOut) {
 	cv::Mat loaded = cv::imread(path, cv::IMREAD_UNCHANGED);
 	if (loaded.empty()) {
 		errorOut = "Failed to load image via OpenCV.";
-		showError(("Cannot load image file: " + state.currentPath).c_str());
+		if (showErrors) {
+			showError(("Cannot load image file: " + state.currentPath).c_str());
+		}
 		return false;
 	}
 
@@ -325,6 +516,79 @@ bool load_image_from_path(ImageState& state, std::string& errorOut) {
 	if (displayName.empty()) {
 		displayName = fsPath.string();
 	}
+	fs::file_time_type writeTime{};
+	std::uintmax_t fileSize = 0;
+	std::string stampError;
+	if (read_file_stamp(path, writeTime, fileSize, stampError)) {
+		state.lastWriteTime = writeTime;
+		state.lastFileSize = fileSize;
+		state.hasFileStamp = true;
+	}
+	return true;
+}
+
+bool rebuild_preview_from_source(ImageState& state, bool grayImage, bool autoMaximizeContrast, bool oneChannelPseudoColor, bool ignoreAlpha, std::string& errorOut) {
+	if (state.sourceOriginal.empty()) {
+		errorOut = "No source image available.";
+		return false;
+	}
+	state.grayApplied = grayImage;
+	state.autoContrastApplied = autoMaximizeContrast;
+	state.pseudoColorApplied = oneChannelPseudoColor;
+	state.ignoreAlphaApplied = ignoreAlpha;
+	auto status = update_preview_from_source(state, errorOut);
+	return status.has_value();
+}
+
+bool refresh_image_if_changed(ImageState& state, std::string& errorOut) {
+	if (state.currentPath.empty()) {
+		return false;
+	}
+
+	fs::file_time_type writeTime{};
+	std::uintmax_t fileSize = 0;
+	std::string stampError;
+	if (!read_file_stamp(state.currentPath, writeTime, fileSize, stampError)) {
+		return false;
+	}
+
+	if (!state.hasFileStamp) {
+		state.lastWriteTime = writeTime;
+		state.lastFileSize = fileSize;
+		state.hasFileStamp = true;
+		return false;
+	}
+
+	if (writeTime == state.lastWriteTime && fileSize == state.lastFileSize) {
+		return false;
+	}
+
+	const bool wasFit = state.fitToWindow;
+	const float oldZoom = state.zoom;
+	const float oldMinZoom = state.minZoom;
+	const ImVec2 oldPan = state.pan;
+
+	std::string loadError;
+	if (!load_image_from_path(state, loadError, false)) {
+		errorOut = loadError;
+		return false;
+	}
+
+	state.lastWriteTime = writeTime;
+	state.lastFileSize = fileSize;
+	state.hasFileStamp = true;
+
+	if (wasFit) {
+		state.fitToWindow = true;
+		state.minZoom = -1.0f;
+	}
+	else {
+		state.fitToWindow = false;
+		state.zoom = oldZoom;
+		state.pan = oldPan;
+		state.minZoom = oldMinZoom;
+	}
+
 	return true;
 }
 static std::vector<ChannelLabel> make_channel_labels(const cv::Mat& mat) {
@@ -431,8 +695,3 @@ void DeleteSelected(ImageStates& states) {
         states.selected = std::min(del, (int)states.states.size() - 1);
     }
 }
-
-
-
-
-

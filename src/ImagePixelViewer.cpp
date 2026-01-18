@@ -6,9 +6,17 @@ int ImagePixelViewer() {
 	if (!glfwInit()) {
 		return 1;
 	}
+#ifdef __APPLE__
+	const char* glsl_version = "#version 150";
+	glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+	glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 2);
+	glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+	glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
+#else
 	const char* glsl_version = "#version 130";
 	glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
 	glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
+#endif
 
 	float mainScale = ImGui_ImplGlfw_GetContentScaleForMonitor(glfwGetPrimaryMonitor());
 	GLFWwindow* window = glfwCreateWindow(static_cast<int>(900 * mainScale), static_cast<int>(500 * mainScale), "ImagePixelViewer", nullptr, nullptr);
@@ -59,6 +67,10 @@ int ImagePixelViewer() {
 	ImGui_ImplOpenGL3_Init(glsl_version);
 
 	ImageStates states;
+	states.Gray_Image_Last = states.Gray_Image;
+	states.Auto_Maximize_Contrast_Last = states.Auto_Maximize_Contrast;
+	states.One_Channel_Pseudo_Color_Last = states.One_Channel_Pseudo_Color;
+	states.Four_Channel_Ignore_Alpha_Last = states.Four_Channel_Ignore_Alpha;
 	glfwSetWindowUserPointer(window, &states);
 	glfwSetDropCallback(window, drop_callback);
 
@@ -70,6 +82,11 @@ int ImagePixelViewer() {
 
 	while (!glfwWindowShouldClose(window)) {
 		glfwPollEvents();
+
+		for (auto& state : states.states) {
+			std::string reloadError;
+			refresh_image_if_changed(state, reloadError);
+		}
 
 		ImGui_ImplOpenGL3_NewFrame();
 		ImGui_ImplGlfw_NewFrame();
@@ -459,6 +476,19 @@ int ImagePixelViewer() {
 		}
 
 
+		if (states.Gray_Image != states.Gray_Image_Last
+			|| states.Auto_Maximize_Contrast != states.Auto_Maximize_Contrast_Last
+			|| states.One_Channel_Pseudo_Color != states.One_Channel_Pseudo_Color_Last
+			|| states.Four_Channel_Ignore_Alpha != states.Four_Channel_Ignore_Alpha_Last) {
+			for (auto& state : states.states) {
+				std::string updateError;
+				rebuild_preview_from_source(state, states.Gray_Image, states.Auto_Maximize_Contrast, states.One_Channel_Pseudo_Color, states.Four_Channel_Ignore_Alpha, updateError);
+			}
+			states.Gray_Image_Last = states.Gray_Image;
+			states.Auto_Maximize_Contrast_Last = states.Auto_Maximize_Contrast;
+			states.One_Channel_Pseudo_Color_Last = states.One_Channel_Pseudo_Color;
+			states.Four_Channel_Ignore_Alpha_Last = states.Four_Channel_Ignore_Alpha;
+		}
 
 		ImGui::Render();
 		int display_w, display_h;

@@ -30,6 +30,7 @@
 #include <string_view>
 #include <array>
 #include <unordered_set>
+#include <limits>
 
 #pragma region Consts
 const float PREVIEW_WIDTH = 300.0f;
@@ -93,6 +94,13 @@ struct ImageState {
 	std::string currentPath;
 	std::string filename;
 	std::string depth;
+	fs::file_time_type lastWriteTime{};
+	std::uintmax_t lastFileSize = 0;
+	bool hasFileStamp = false;
+	bool autoContrastApplied = false;
+	bool pseudoColorApplied = false;
+	bool ignoreAlphaApplied = false;
+	bool grayApplied = false;
 	bool fitToWindow = true;
 	int width;
 	int height;
@@ -108,9 +116,13 @@ struct ImageState {
 struct ImageStates {
 	bool Link_View = false;
 	bool Gray_Image = false;
+	bool Gray_Image_Last = false;
 	bool Auto_Maximize_Contrast = false;
+	bool Auto_Maximize_Contrast_Last = false;
 	bool One_Channel_Pseudo_Color = false;
+	bool One_Channel_Pseudo_Color_Last = false;
 	bool Four_Channel_Ignore_Alpha = false;
+	bool Four_Channel_Ignore_Alpha_Last = false;
 	vector<ImageState> states;
 	int selected = 0;
 };
@@ -125,7 +137,9 @@ struct ImageStates {
 void glfw_error_callback(int error, const char* description);
 void drop_callback(GLFWwindow* window, int count, const char** paths);
 void release_texture(ImageTexture& texture);
-bool load_image_from_path(ImageState& state, std::string& errorOut);
+bool load_image_from_path(ImageState& state, std::string& errorOut, bool showErrors = true);
+bool refresh_image_if_changed(ImageState& state, std::string& errorOut);
+bool rebuild_preview_from_source(ImageState& state, bool grayImage, bool autoMaximizeContrast, bool oneChannelPseudoColor, bool ignoreAlpha, std::string& errorOut);
 std::string format_pixel_value(const cv::Mat& mat, int x, int y);
 void DeleteSelected(ImageStates& states);
 #pragma endregion
@@ -139,4 +153,3 @@ int ImagePixelViewer();
 
 
 #endif // MAIN_H
-

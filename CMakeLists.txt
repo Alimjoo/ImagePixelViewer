@@ -1,14 +1,28 @@
 cmake_minimum_required(VERSION 3.14)
 project(ImagePixelViewer LANGUAGES C CXX)
 
-# Variables
-set(BUILD_WITHOUT_CONSOLE false)
+option(BUILD_WITHOUT_CONSOLE "Build without console window on Windows." OFF)
+option(GLEW_USE_STATIC_LIBS "Use static GLEW libraries." OFF)
 
-# Third-party lib Paths
-set(IMGUI_DIR "C:/Users/PI/Documents/imgui-1.92.4")
-set(GLFW_DIR "C:/Users/PI/Documents/glfw-3.4.bin.WIN64")
-set(OpenCV_DIR "C:/Users/PI/Documents/opencv/build")
-set(GLEW_DIR "C:/Users/PI/Documents/glew-2.2.0")
+# Third-party locations (use -D...=path when configuring)
+set(IMGUI_DIR "${CMAKE_CURRENT_SOURCE_DIR}/imgui-1.92.5" CACHE PATH "Path to Dear ImGui source tree")
+set(GLFW_DIR "" CACHE PATH "Path to GLFW install (optional if find_package works)")
+set(GLEW_DIR "" CACHE PATH "Path to GLEW install (optional if find_package works)")
+set(OpenCV_DIR "" CACHE PATH "Path to OpenCV config directory")
+
+if(GLFW_DIR)
+    list(APPEND CMAKE_PREFIX_PATH "${GLFW_DIR}")
+endif()
+if(GLEW_DIR)
+    list(APPEND CMAKE_PREFIX_PATH "${GLEW_DIR}")
+endif()
+if(OpenCV_DIR)
+    list(APPEND CMAKE_PREFIX_PATH "${OpenCV_DIR}")
+endif()
+
+if(NOT EXISTS "${IMGUI_DIR}/imgui.h")
+    message(FATAL_ERROR "IMGUI_DIR must point to Dear ImGui sources (missing imgui.h).")
+endif()
 
 # -------------------------------------------------
 # 1. Dear ImGui (static library)
@@ -27,33 +41,44 @@ add_library(imgui STATIC
 target_include_directories(imgui PUBLIC
     ${IMGUI_DIR}
     ${IMGUI_DIR}/backends
-    ${GLEW_DIR}/include
 )
 
 # Tell ImGui which OpenGL loader to use.
 # ImGui ships a tiny glad copy in examples/; we use that.
 target_compile_definitions(imgui PUBLIC
     IMGUI_IMPL_OPENGL_LOADER_GLEW 
-    GLEW_STATIC
 )
 
 # -------------------------------------------------
 # 2. GLFW (static library, built from source)
 # -------------------------------------------------
 target_include_directories(imgui PUBLIC
-    ${GLFW_DIR}/include
 )
 
 # -------------------------------------------------
 # 3. Link ImGui with GLFW
 # -------------------------------------------------
-target_link_libraries(imgui PUBLIC 
-    ${GLFW_DIR}/lib-vc2022/glfw3.lib
-    opengl32
+find_package(OpenGL REQUIRED)
+find_package(glfw3 CONFIG REQUIRED)
+find_package(GLEW REQUIRED)
+find_package(OpenCV REQUIRED)
+
+if(TARGET glfw)
+    set(GLFW_TARGET glfw)
+elseif(TARGET glfw3)
+    set(GLFW_TARGET glfw3)
+else()
+    message(FATAL_ERROR "glfw target not found after find_package(glfw3).")
+endif()
+
+target_link_libraries(imgui PUBLIC
+    ${GLFW_TARGET}
+    OpenGL::GL
 )
 
-#OpenCV
-find_package(OpenCV REQUIRED)
+if(APPLE)
+    target_compile_definitions(imgui PUBLIC GL_SILENCE_DEPRECATION)
+endif()
 
 # -------------------------------------------------
 # 4. Your executable
@@ -63,14 +88,18 @@ add_executable(${PROJECT_NAME} ${ALL_FILES} )
 target_include_directories(${PROJECT_NAME} PUBLIC 
     ./
     ./src/
-    ${GLEW_DIR}/include
     ${OpenCV_INCLUDE_DIRS}
 )
 target_link_libraries(${PROJECT_NAME} PRIVATE 
     imgui
-    ${GLEW_DIR}/lib/Release/x64/glew32s.lib
+    GLEW::GLEW
     ${OpenCV_LIBS}
 )
+
+if(GLEW_USE_STATIC_LIBS)
+    target_compile_definitions(imgui PUBLIC GLEW_STATIC)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE GLEW_STATIC)
+endif()
 
 
 # -------------------------------------------------
@@ -97,4 +126,3 @@ add_custom_command(
   COMMENT "Copying assets directory to output folder"
   VERBATIM
 )
-
